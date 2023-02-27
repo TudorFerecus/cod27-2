@@ -54,6 +54,8 @@ public class TestClass extends OpMode {
         }
         if(!sGlisRight.getState())
         {
+
+
             glisRightOffset = -mGlisRight.getCurrentPosition();
         }
 

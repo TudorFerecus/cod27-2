@@ -25,6 +25,7 @@ public class codnetsuperior extends OpMode {
     private boolean clawState = false;
     private boolean forebarState = false;
     private boolean _180State = false;
+    boolean finishedMove = false;
 
    // private boolean systemRunningUp = false;
 
@@ -36,6 +37,8 @@ public class codnetsuperior extends OpMode {
     private double lastTimeX;
     private double lastTimeDL;
     private double lastTimeDR;
+    private double forebar_delay;
+    private double _180_delay;
 
     private boolean resetY = false;
     private boolean resetA = false;
@@ -57,6 +60,10 @@ public class codnetsuperior extends OpMode {
     {
         UP1,
         UP2,
+        UP3,
+        DOWN1,
+        DOWN2,
+        DOWN3,
         FINISH
     }
     private MOVEMENT_STATE currentMovement = MOVEMENT_STATE.UP1;
@@ -90,51 +97,114 @@ public class codnetsuperior extends OpMode {
         boolean servo_180 = gamepad2.dpad_left;
         boolean servo_claw = gamepad2.a;
 
-        boolean auto_mid = gamepad2.x;
-        boolean auto_low = gamepad1.y;
-
-        boolean force_stop_system = gamepad2.b;
+        boolean force_stop_state_machine = gamepad1.x;
+        boolean force_stop_glis = gamepad1.b;
+        boolean force_stop_crem = gamepad1.y;
 
         timersControl();
 
-
+        forceStop(force_stop_state_machine, force_stop_glis, force_stop_crem);
         movement(forward, strafe, rotation, slowdown);
-
-
-
-        switch (currentState)
-        {
-            case DRIVER_CONTROLLED:
-                glisOperation(glis_up, glis_down);
-                cremOperation(crem_fwd, crem_rev);
-                forebarOperation(servo_fb);
-                clawOperation(servo_claw);
-                _180Operation(servo_180);
-                servoMovementOperation(servo_move_up, servo_move_down);
-                if(gamepad2.y) currentState = STATE_MACHINE.AUTOMID;
-                break;
-
-            case AUTOMID:
-                autoUp(1300);
-                break;
-
-            case AUTOHIGH:
-                autoUp(1400);
-                break;
-
-            case AUTODOWN:
-                break;
-
-        }
 
         telemetry.addData("RunMode", hardware.mGlisRight.getMode());
         telemetry.addData("RIGHTPOS", hardware.mGlisRight.getCurrentPosition());
         telemetry.addData("LEFTTPOS", hardware.mGlisLeft.getCurrentPosition());
         telemetry.addData("crempos" , hardware.mCremaliera.getCurrentPosition());
         telemetry.addData("state", currentMovement);
+        telemetry.addData("senzor down", hardware.downBorderMovement.getState());
+        telemetry.addData("senzor up", hardware.upBorderMovement.getState());
         telemetry.addData("crem", hardware.mCremaliera.isBusy());
         telemetry.update();
 
+        switch (currentState)
+        {
+            case DRIVER_CONTROLLED:
+                if(!force_stop_glis) glisOperation(glis_up, glis_down);
+                if(!force_stop_crem) cremOperation(crem_fwd, crem_rev);
+                forebarOperation(servo_fb);
+                clawOperation(servo_claw);
+                _180Operation(servo_180);
+                servoMovementOperation(servo_move_up, servo_move_down);
+                if(gamepad2.x) currentState = STATE_MACHINE.AUTOMID;
+                if(gamepad2.y) currentState = STATE_MACHINE.AUTOHIGH;
+                if(gamepad2.b) {
+                    _180_delay = elapsedTime.milliseconds();
+                    currentMovement = MOVEMENT_STATE.DOWN1;
+                    currentState = STATE_MACHINE.AUTOMID;
+                }
+                break;
+
+            case AUTOMID:
+                autoUp(1400);
+                break;
+
+            case AUTOHIGH:
+                autoUp(2000);
+                break;
+        }
+
+
+    }
+
+    private void autoUp(int finalPosTicks)
+    {
+        switch (currentMovement)
+        {
+            case UP1:
+                goToPos(Specifications.glis_treshold_move, 0);
+                if(Specifications.glis_treshold_move < Math.abs(hardware.mGlisRight.getCurrentPosition())
+                        && Specifications.glis_treshold_move < Math.abs(hardware.mGlisLeft.getCurrentPosition()))
+                    currentMovement = MOVEMENT_STATE.UP2;
+                break;
+
+            case UP2:
+                goToPos(finalPosTicks, 0);
+                if(!finishedMove) finishedMove = moveCrane(1);
+                moveCremaliera(Specifications.lower_limit_crem_ticks);
+                forebar_delay = elapsedTime.milliseconds();
+                if(hardware.mCremaliera.getCurrentPosition()<Specifications.lower_limit_crem_ticks + 50 && finishedMove
+                        && finalPosTicks < Math.abs(hardware.mGlisRight.getCurrentPosition())
+                        && finalPosTicks < Math.abs(hardware.mGlisLeft.getCurrentPosition()))
+                {
+                    hardware.mCremaliera.setPower(0);
+                    hardware.servoMovement.setPower(0);
+                    hardware.mCremaliera.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+                    currentMovement = MOVEMENT_STATE.UP3;
+                }
+                break;
+
+            case UP3:
+                finishedMove = false;
+                hardware.servo180.setPosition(Specifications.servo_180_down);
+                if(forebar_delay+254 < elapsedTime.milliseconds()){
+                    hardware.servoForebar.setPosition(Specifications.servo_forebar_up);
+                    currentState = STATE_MACHINE.DRIVER_CONTROLLED;
+                }
+                break;
+
+            case DOWN1:
+                hardware.servoForebar.setPosition(Specifications.servo_forebar_down);
+                hardware.servo180.setPosition(Specifications.servo_180_up);
+                if(_180_delay+700 < elapsedTime.milliseconds())
+                    currentMovement = MOVEMENT_STATE.DOWN2;
+                break;
+
+            case DOWN2:
+                moveCremaliera(Specifications.upper_limit_crem_ticks);
+                if(!finishedMove) finishedMove = moveCrane(0);
+                goToPos(Specifications.glis_treshold_move, 1);
+                if(hardware.mCremaliera.getCurrentPosition()>Specifications.upper_limit_crem_ticks - 50 && !hardware.mGlisLeft.isBusy() && !hardware.mGlisRight.isBusy())
+                    currentMovement = MOVEMENT_STATE.DOWN3;
+                break;
+
+            case DOWN3:
+                finishedMove = false;
+                goToPos(0, 1);
+                break;
+
+            case FINISH:
+                break;
+        }
     }
 
     private void timersControl() {
@@ -252,8 +322,8 @@ public class codnetsuperior extends OpMode {
 
     private void clawOperation(boolean button){
         if (!resetA && button){
-            if (clawState) hardware.servoClaw.setPosition(Specifications.servo_claw_open);
-            else hardware.servoClaw.setPosition(Specifications.servo_claw_closed);
+            if (clawState) hardware.servoClaw.setPosition(Specifications.servo_claw_closed);
+            else hardware.servoClaw.setPosition(Specifications.servo_claw_open);
 
             resetA = true;
             clawState = !clawState;
@@ -301,6 +371,17 @@ public class codnetsuperior extends OpMode {
 
     private void goToPos(int posTicks, int direction)
     {
+        if(!hardware.sGlisLeft.getState() && direction==1){
+            hardware.mGlisLeft.setPower(0);
+            hardware.mGlisRight.setPower(0);
+            hardware.mGlisLeft.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+            hardware.mGlisRight.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+            hardware.mGlisLeft.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            hardware.mGlisRight.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            currentState = STATE_MACHINE.DRIVER_CONTROLLED;
+            currentMovement = MOVEMENT_STATE.UP1;
+            return;
+        }
         if(direction == 0) {
             if(posTicks > Math.abs(hardware.mGlisRight.getCurrentPosition()) && posTicks > Math.abs(hardware.mGlisLeft.getCurrentPosition()))
             {
@@ -329,43 +410,14 @@ public class codnetsuperior extends OpMode {
         }
     }
 
-    private void autoUp(int finalPosTicks)
-    {
-        switch (currentMovement)
-        {
-            case UP1:
-                goToPos(Specifications.glis_treshold_move, 0);
-                if(Specifications.glis_treshold_move < Math.abs(hardware.mGlisRight.getCurrentPosition())
-                        && Specifications.glis_treshold_move < Math.abs(hardware.mGlisLeft.getCurrentPosition()))
-                    currentMovement = MOVEMENT_STATE.UP2;
-                break;
 
-            case UP2:
-                goToPos(finalPosTicks, 0);
-                boolean finishedMove = moveCrane(1);
-                moveCremaliera(Specifications.lower_limit_crem_ticks);
-                if(!hardware.mCremaliera.isBusy() && finishedMove
-                && finalPosTicks < Math.abs(hardware.mGlisRight.getCurrentPosition())
-                        && finalPosTicks < Math.abs(hardware.mGlisLeft.getCurrentPosition()))
-                {
-                    hardware.mCremaliera.setPower(0);
-                    hardware.servoMovement.setPower(0);
-                    hardware.mCremaliera.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-                    currentMovement = MOVEMENT_STATE.FINISH;
-                }
-                break;
-
-            case FINISH:
-                break;
-        }
-    }
 
     private boolean moveCrane(int direction)
     {
         if(direction == 0)
         {
             hardware.servoMovement.setPower(-Specifications.servo_movement_ms);
-            if(!hardware.downBorderMovement.getState())
+            if(!hardware.upBorderMovement.getState())
             {
                 hardware.servoMovement.setPower(0);
                 return true;
@@ -374,7 +426,7 @@ public class codnetsuperior extends OpMode {
         if(direction == 1)
         {
             hardware.servoMovement.setPower(Specifications.servo_movement_ms);
-            if(!hardware.upBorderMovement.getState())
+            if(!hardware.downBorderMovement.getState())
             {
                 hardware.servoMovement.setPower(0);
                 return true;
@@ -391,5 +443,17 @@ public class codnetsuperior extends OpMode {
 
     }
 
+    private void forceStop(boolean button, boolean glisbutton, boolean crembutton){
+        if(button){
+            currentState = STATE_MACHINE.DRIVER_CONTROLLED;
+            currentMovement = MOVEMENT_STATE.UP1;
+            hardware.servoMovement.setPower(0);
+        }
+        if(glisbutton || Math.abs(hardware.mGlisLeft.getCurrentPosition())>2300){
+            hardware.mGlisRight.setPower(0);
+            hardware.mGlisLeft.setPower(0);
+        }
+        if(crembutton || hardware.mCremaliera.getCurrentPosition() > 750 || hardware.mCremaliera.getCurrentPosition() < -1270) hardware.mCremaliera.setPower(0);
+    }
 
 }

@@ -40,7 +40,7 @@ public class Specifications
     public static float movement_speed_slow = 0.2f;
 
 
-    public static float crem_speed = 0.2f;
+    public static float crem_speed = 0.5f;
 
     public static int lower_limit_crem_ticks = -1250; //-1372 max
     public static int upper_limit_crem_ticks = 700;  //995 max
